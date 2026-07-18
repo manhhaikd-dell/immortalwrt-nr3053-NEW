@@ -1,0 +1,11 @@
+#!/bin/sh
+
+. /lib/functions.sh
+. /lib/viettel-wan-led.sh
+
+viettel_wan_led_supported || exit 0
+
+/etc/init.d/viettel-wan-led enable
+viettel_wan_led_update
+
+exit 0

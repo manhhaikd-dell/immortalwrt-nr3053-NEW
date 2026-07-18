@@ -1,0 +1,197 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (for example v1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: build-release-${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "5"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve tag and version
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag; expected vMAJOR.MINOR.PATCH, got: $tag" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  build-firmware:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore executable permissions
+        shell: bash
+        run: bash scripts/restore-exec-permissions.sh
+
+      - name: Validate repository
+        shell: bash
+        run: bash scripts/validate-nr3053-repo.sh
+
+      - name: Maximize build disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h /
+
+      - name: Install build dependencies
+        shell: bash
+        run: bash scripts/install-deps.sh
+
+      - name: Cache host tools and toolchain
+        uses: actions/cache@v5
+        with:
+          path: |
+            staging_dir/host
+            staging_dir/toolchain-aarch64_cortex-a53_gcc-*
+          key: nr3053-toolchain-${{ runner.os }}-${{ hashFiles('Makefile', 'rules.mk', 'config/**', 'include/**', 'tools/**', 'toolchain/**', 'target/linux/generic/**', 'target/linux/mediatek/**', 'defconfig/nr3053-clean.config') }}
+
+      - name: Cache downloaded sources
+        uses: actions/cache@v5
+        with:
+          path: dl
+          key: nr3053-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'package/**/Makefile', 'target/linux/**/Makefile', 'tools/**/Makefile', 'toolchain/**/Makefile') }}
+          restore-keys: |
+            nr3053-dl-${{ runner.os }}-
+
+      - name: Build and validate firmware
+        shell: bash
+        run: bash scripts/build-viettel.sh defconfig/nr3053-clean.config
+
+      - name: Verify release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d dist
+          test "$(find dist -maxdepth 1 -type f -name '*-sysupgrade.itb' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*-initramfs-recovery.itb' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*-bl31-uboot.fip' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*-preloader.bin' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.manifest' | wc -l)" -eq 1
+          test -s dist/sha256sums
+          (cd dist && sha256sum -c sha256sums)
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: immortalwrt-nr3053-${{ needs.prepare.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Free disk after successful build
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Before cleanup ==="
+          df -h /
+          du -sh build_dir bin tmp staging_dir dl 2>/dev/null || true
+          rm -rf build_dir bin tmp logs feeds
+          rm -rf staging_dir/target-* staging_dir/packages
+          echo "=== After cleanup; keeping host tools, toolchain and dl cache ==="
+          df -h /
+          du -sh staging_dir/host staging_dir/toolchain-* dl 2>/dev/null || true
+
+  release:
+    needs: [prepare, build-firmware]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: immortalwrt-nr3053-${{ needs.prepare.outputs.version }}
+          path: release-assets
+
+      - name: List release files
+        shell: bash
+        run: find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ImmortalWrt ${{ needs.prepare.outputs.version }} — NR3053
+          generate_release_notes: true
+          make_latest: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body: |
+            ## ImmortalWrt ${{ needs.prepare.outputs.version }} cho Viettel/SDMC NR3053
+
+            Bản build sạch cho **NR3053 512 MiB RAM / NAND 256 MiB**, hỗ trợ metadata:
+
+            - `viettel,nr3053`
+            - `sdmc,nr3053`
+
+            ### File sử dụng
+
+            | Dạng file | Mục đích |
+            |---|---|
+            | `*-squashfs-sysupgrade.itb` | Nâng cấp từ một bản OpenWrt/ImmortalWrt đã dùng bootloader FIT/UBI tương thích |
+            | `*-initramfs-recovery.itb` | Boot thử/recovery trong RAM qua UART hoặc TFTP |
+            | `*-bl31-uboot.fip` | Bootloader FIP; có thể cần khi chuyển từ ROM gốc, rủi ro cao |
+            | `*-preloader.bin` | BL2; không cần cho nâng cấp/cài đặt thông thường, không flash qua LuCI |
+            | `*.manifest` | Danh sách package thực tế trong image |
+            | `sha256sums` | Mã kiểm tra SHA-256 của các file phát hành |
+
+            **Nâng cấp thông thường chỉ dùng file `*-squashfs-sysupgrade.itb`.**
+            Chạy `sysupgrade -T <file>` trước khi flash. Khi chuyển từ build hoặc layout khác, ưu tiên nâng cấp sạch bằng `sysupgrade -n`.
+
+            Từ ROM gốc Viettel, không flash mù `sysupgrade.itb`: image này dùng UBI volume `fit`, nên có thể phải test U-Boot/FIP trong RAM rồi chuyển `mtd3/FIP` trước. `sysupgrade -T` không kiểm tra khả năng boot của U-Boot cũ.
+
+            Hướng dẫn: ${{ github.server_url }}/${{ github.repository }}/blob/${{ needs.prepare.outputs.tag }}/docs/huong-dan-nap-firmware.md
+          files: release-assets/*

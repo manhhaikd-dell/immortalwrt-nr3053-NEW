@@ -1,0 +1,102 @@
+name: Dev Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "package/**"
+      - "target/**"
+      - "include/**"
+      - "scripts/**"
+      - "config/**"
+      - "tools/**"
+      - "toolchain/**"
+      - "defconfig/**"
+      - "custom-files/**"
+      - "feeds.conf.default"
+      - "Makefile"
+      - "rules.mk"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+concurrency:
+  group: dev-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "5"
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore executable permissions
+        shell: bash
+        run: bash scripts/restore-exec-permissions.sh
+
+      - name: Validate repository
+        shell: bash
+        run: bash scripts/validate-nr3053-repo.sh
+
+      - name: Maximize build disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h /
+
+      - name: Install build dependencies
+        shell: bash
+        run: bash scripts/install-deps.sh
+
+      - name: Cache host tools and toolchain
+        uses: actions/cache@v5
+        with:
+          path: |
+            staging_dir/host
+            staging_dir/toolchain-aarch64_cortex-a53_gcc-*
+          key: nr3053-toolchain-${{ runner.os }}-${{ hashFiles('Makefile', 'rules.mk', 'config/**', 'include/**', 'tools/**', 'toolchain/**', 'target/linux/generic/**', 'target/linux/mediatek/**', 'defconfig/nr3053-clean.config') }}
+
+      - name: Cache downloaded sources
+        uses: actions/cache@v5
+        with:
+          path: dl
+          key: nr3053-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'package/**/Makefile', 'target/linux/**/Makefile', 'tools/**/Makefile', 'toolchain/**/Makefile') }}
+          restore-keys: |
+            nr3053-dl-${{ runner.os }}-
+
+      - name: Build and validate firmware
+        shell: bash
+        run: bash scripts/build-viettel.sh defconfig/nr3053-clean.config
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: immortalwrt-nr3053-dev-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Free disk after successful build
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build_dir bin tmp logs feeds
+          rm -rf staging_dir/target-* staging_dir/packages
+          df -h /

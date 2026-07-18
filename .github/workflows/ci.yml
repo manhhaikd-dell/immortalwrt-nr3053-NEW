@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Restore executable permissions
+        shell: bash
+        run: bash scripts/restore-exec-permissions.sh
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: ShellCheck project build scripts
+        shell: bash
+        run: |
+          shellcheck --severity=warning \
+            scripts/install-deps.sh \
+            scripts/nr3053-package-policy.sh \
+            scripts/restore-exec-permissions.sh \
+            scripts/validate-nr3053-repo.sh \
+            scripts/prepare-build.sh \
+            scripts/build-viettel.sh \
+            scripts/sync-upstream.sh
+
+      - name: Validate NR3053 repository rules
+        shell: bash
+        run: bash scripts/validate-nr3053-repo.sh
+
+      - name: Validate Python syntax without bytecode files
+        shell: bash
+        run: |
+          python3 - scripts/unlock/unlock_viettel.py <<'PY'
+          from pathlib import Path
+          import sys
+
+          for name in sys.argv[1:]:
+              path = Path(name)
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+      - name: Validate workflow YAML syntax
+        shell: bash
+        run: |
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].sort.each { |f| YAML.parse_file(f); puts "OK: #{f}" }'

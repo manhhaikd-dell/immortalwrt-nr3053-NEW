@@ -1,0 +1,51 @@
+#!/bin/sh
+
+uci -q get system.@imm_init[0] > "/dev/null" 2>&1 || uci -q add system imm_init > "/dev/null" 2>&1
+
+if ! uci -q get system.@imm_init[0].system_vn > "/dev/null" 2>&1; then
+	uci -q batch <<-EOF
+		set system.@system[0].timezone="ICT-7"
+		set system.@system[0].zonename="Asia/Ho_Chi_Minh"
+
+		delete system.ntp.server
+		add_list system.ntp.server="pool.ntp.org"
+		add_list system.ntp.server="time.google.com"
+		add_list system.ntp.server="vn.pool.ntp.org"
+
+		set luci.main.lang="vi"
+		commit luci
+
+		set system.@imm_init[0].system_vn="1"
+		commit system
+	EOF
+fi
+
+# APK/opkg mirror: official ImmortalWrt only (mirrors.vsean.net breaks apk update).
+apk_mirror="https://downloads.immortalwrt.org"
+uci -q set system.@imm_init[0].apk_mirror="$apk_mirror"
+uci -q commit system
+
+for f in /etc/apk/repositories.d/distfeeds.list /etc/opkg/distfeeds.conf; do
+	[ -f "$f" ] || continue
+	sed -i.bak \
+		-e "s,https://mirrors.vsean.net/openwrt,$apk_mirror,g" \
+		-e "s,https://mirrors.vsean.net/immortalwrt,$apk_mirror,g" \
+		-e '/\/video\/packages\.adb/d' \
+		-e '/_video /d' \
+		-e '/\/video$/d' \
+		"$f"
+done
+rm -f /var/cache/apk/*.adb /var/cache/apk/*.gz 2>/dev/null
+
+[ -x /etc/init.d/viettel-apk-mirror ] && {
+	/etc/init.d/viettel-apk-mirror enable
+	/etc/init.d/viettel-apk-mirror start
+}
+
+# Enable UPnP by default
+if uci -q get upnpd.config > /dev/null; then
+	uci -q set upnpd.config.enabled='1'
+	uci -q commit upnpd
+fi
+
+exit 0

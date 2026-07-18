@@ -1,0 +1,19 @@
+#!/bin/sh
+
+[ "$INTERFACE" = wan ] || exit 0
+
+case "$ACTION" in
+	ifup|ifupdate|ifdown) ;;
+	*) exit 0 ;;
+esac
+
+. /lib/functions.sh
+. /lib/viettel-wan-led.sh
+
+viettel_wan_led_supported || exit 0
+
+[ "$ACTION" = ifdown ] && viettel_wan_led_set down && exit 0
+
+viettel_wan_led_update
+
+exit 0

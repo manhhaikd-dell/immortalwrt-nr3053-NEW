@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+	. /lib/functions.sh
+	. /lib/viettel-wan-led.sh
+
+	viettel_wan_led_supported || return 0
+	viettel_wan_led_update
+}
+
+stop() {
+	. /lib/functions.sh
+	. /lib/viettel-wan-led.sh
+
+	viettel_wan_led_supported || return 0
+	viettel_wan_led_suspended || viettel_wan_led_set down
+}
