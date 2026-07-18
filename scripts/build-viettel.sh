@@ -41,17 +41,31 @@ if ! make -j"$JOBS" V=sc; then
 fi
 
 phase "BUILD 4/6: Validate package manifest"
-mapfile -t manifests < <(compgen -G "$TARGET_DIR/*viettel_nr3053*.manifest" | sort || true)
-if [ "${#manifests[@]}" -ne 1 ]; then
-    echo "ERROR: Expected exactly one NR3053 manifest; found ${#manifests[@]}." >&2
-    if [ "${#manifests[@]}" -eq 0 ]; then
-        echo "  <none>" >&2
-    else
-        printf '  %s\n' "${manifests[@]}" >&2
+manifest="$TARGET_DIR/immortalwrt-mediatek-filogic.manifest"
+
+if [ ! -s "$manifest" ]; then
+    mapfile -t manifests < <(
+        find "$TARGET_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.manifest' \
+            -print | sort
+    )
+
+    if [ "${#manifests[@]}" -ne 1 ]; then
+        echo "ERROR: Could not uniquely locate target package manifest; found ${#manifests[@]}." >&2
+        if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "  <none>" >&2
+        else
+            printf '  %s\n' "${manifests[@]}" >&2
+        fi
+        exit 1
     fi
-    exit 1
+
+    manifest="${manifests[0]}"
 fi
-manifest="${manifests[0]}"
+
+echo "Using package manifest: $manifest"
 
 declare -A manifest_packages=()
 while read -r package _; do
