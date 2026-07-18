@@ -1,6 +1,7 @@
 #!/bin/bash
 # Shared package policy for the clean Viettel/SDMC NR3053 image.
-# This file is sourced by validation, preparation, and build scripts.
+# This file is intentionally sourced by other scripts.
+# shellcheck disable=SC2034
 
 readonly -a NR3053_REQUIRED_PACKAGES=(
     luci
@@ -22,30 +23,38 @@ readonly -a NR3053_FORBIDDEN_PACKAGES=(
     luci-app-adblock
     luci-i18n-adblock-vi
     blockd
+
     luci-app-ddns
     luci-i18n-ddns-vi
     ddns-scripts
     ddns-scripts-cloudflare
     ddns-scripts-noip
+
     luci-app-upnp
     luci-i18n-upnp-vi
     miniupnpd
+
     kmod-wireguard
     wireguard-tools
     luci-proto-wireguard
     rpcd-mod-wireguard
+
     luci-theme-aurora
     luci-app-aurora-config
+
     luci-app-nr3053-throughwall
     luci-i18n-nr3053-throughwall-vi
+
     kmod-zram
     zram-swap
-    kmod-tcp-bbr
+
     tailscale
     luci-app-tailscale-community
+
     default-settings
     default-settings-chn
     default-settings-vn
+
     kmod-usb3
     kmod-usb-ledtrig-usbport
     automount
@@ -61,6 +70,6 @@ readonly -a NR3053_BBR_SYMBOLS=(
 )
 
 readonly -a NR3053_SUPPORTED_DEVICES=(
-    viettel,nr3053
-    sdmc,nr3053
+    "viettel,nr3053"
+    "sdmc,nr3053"
 )
